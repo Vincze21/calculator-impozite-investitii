@@ -110,10 +110,15 @@ interface CashOperationRow {
 function buildParseResult(
   closedRows: ClosedPositionRow[],
   cashRows: CashOperationRow[],
+  /** True when source is XTB Romania (resident broker, values already in RON) */
+  isRO = false,
 ): ParseResult {
   const transactions: NormalizedTransaction[] = [];
   const interests: NormalizedInterest[] = [];
   const warnings: string[] = [];
+
+  // Detect XTB Romania from cash operations (Romania Tax entry = withholding at source)
+  const resident = isRO || cashRows.some(r => r.type.toLowerCase().includes('romania'));
 
   let minDate: Date | null = null;
   let maxDate: Date | null = null;
@@ -129,7 +134,6 @@ function buildParseResult(
 
     const cleanedSymbol = cleanSymbol(rawSymbol);
     const forex = isForexPair(rawSymbol);
-    const currency = detectCurrency(rawSymbol);
     const instrumentType = classifyInstrument(rawSymbol);
 
     const openDate = parseXTBDate(row.openTime);
@@ -143,10 +147,10 @@ function buildParseResult(
     updatePeriod(openDate);
     updatePeriod(closeDate);
 
-    const isBuy = row.type.toUpperCase() !== 'SELL';
-
     if (forex) {
-      // CFD Forex: synthetic P/L approach (like AvaTrade) to avoid lot-size complexity
+      // CFD Forex: synthetic P/L approach to avoid lot-size complexity.
+      // FIX Bug 3: always BUY at openDate, SELL at closeDate regardless of position
+      // direction (LONG/SHORT). The synthetic pair only needs BUY < SELL in time for FIFO.
       const uniqueSymbol = `${cleanedSymbol} #${row.positionId}`;
       const costs = Math.abs(row.commission) + Math.abs(row.swap);
       const profit = row.grossPL;
@@ -156,7 +160,7 @@ function buildParseResult(
 
       transactions.push({
         id: uuidv4(),
-        date: isBuy ? openDate : closeDate,
+        date: openDate,   // always openDate for BUY
         type: 'buy',
         symbol: uniqueSymbol,
         quantity: 1,
@@ -169,7 +173,7 @@ function buildParseResult(
 
       transactions.push({
         id: uuidv4(),
-        date: isBuy ? closeDate : openDate,
+        date: closeDate,  // always closeDate for SELL
         type: 'sell',
         symbol: uniqueSymbol,
         quantity: 1,
@@ -187,44 +191,82 @@ function buildParseResult(
         );
       }
     } else {
-      // Stock / ETF — Purchase value and Sale value are already in RON
+      // Stock / ETF
       const vol = row.volume;
       const commissionHalf = Math.abs(row.commission) / 2;
 
-      const buyExRate = (row.openPrice > 0 && vol > 0)
-        ? row.purchaseValue / (row.openPrice * vol)
-        : 1;
-      const sellExRate = (row.closePrice > 0 && vol > 0)
-        ? row.saleValue / (row.closePrice * vol)
-        : 1;
+      if (resident) {
+        // FIX Bug 2: XTB Romania — Purchase/Sale values are already in RON, commission too.
+        // Use currency='RON' so FIFO applies rate=1 (no double-conversion of commission).
+        const buyPriceRON = vol > 0 ? row.purchaseValue / vol : 0;
+        const sellPriceRON = vol > 0 ? row.saleValue / vol : 0;
 
-      transactions.push({
-        id: uuidv4(),
-        date: openDate,
-        type: 'buy',
-        symbol: cleanedSymbol,
-        quantity: vol,
-        pricePerUnit: row.openPrice,
-        totalAmount: row.purchaseValue,
-        commission: commissionHalf,
-        currency,
-        exchangeRate: buyExRate > 0.1 ? buyExRate : 1,
-        instrumentType,
-      });
+        transactions.push({
+          id: uuidv4(),
+          date: openDate,
+          type: 'buy',
+          symbol: cleanedSymbol,
+          quantity: vol,
+          pricePerUnit: buyPriceRON,
+          totalAmount: row.purchaseValue,
+          commission: commissionHalf,
+          currency: 'RON',
+          exchangeRate: 1,
+          instrumentType,
+        });
 
-      transactions.push({
-        id: uuidv4(),
-        date: closeDate,
-        type: 'sell',
-        symbol: cleanedSymbol,
-        quantity: vol,
-        pricePerUnit: row.closePrice,
-        totalAmount: row.saleValue,
-        commission: commissionHalf,
-        currency,
-        exchangeRate: sellExRate > 0.1 ? sellExRate : 1,
-        instrumentType,
-      });
+        transactions.push({
+          id: uuidv4(),
+          date: closeDate,
+          type: 'sell',
+          symbol: cleanedSymbol,
+          quantity: vol,
+          pricePerUnit: sellPriceRON,
+          totalAmount: row.saleValue,
+          commission: commissionHalf,
+          currency: 'RON',
+          exchangeRate: 1,
+          instrumentType,
+        });
+      } else {
+        // XTB International: prices in asset currency (USD, EUR…), use derived exchange rate
+        const currency = detectCurrency(rawSymbol);
+
+        const buyExRate = (row.openPrice > 0 && vol > 0)
+          ? row.purchaseValue / (row.openPrice * vol)
+          : 1;
+        const sellExRate = (row.closePrice > 0 && vol > 0)
+          ? row.saleValue / (row.closePrice * vol)
+          : 1;
+
+        transactions.push({
+          id: uuidv4(),
+          date: openDate,
+          type: 'buy',
+          symbol: cleanedSymbol,
+          quantity: vol,
+          pricePerUnit: row.openPrice,
+          totalAmount: row.purchaseValue,
+          commission: commissionHalf,
+          currency,
+          exchangeRate: buyExRate > 0.1 ? buyExRate : 1,
+          instrumentType,
+        });
+
+        transactions.push({
+          id: uuidv4(),
+          date: closeDate,
+          type: 'sell',
+          symbol: cleanedSymbol,
+          quantity: vol,
+          pricePerUnit: row.closePrice,
+          totalAmount: row.saleValue,
+          commission: commissionHalf,
+          currency,
+          exchangeRate: sellExRate > 0.1 ? sellExRate : 1,
+          instrumentType,
+        });
+      }
     }
   }
 
@@ -248,7 +290,8 @@ function buildParseResult(
   }
 
   return {
-    broker: 'xtb',
+    // FIX Bug 1: return 'xtb_ro' (resident) if Romanian entity detected
+    broker: resident ? 'xtb_ro' : 'xtb',
     transactions,
     dividends: [],
     interests,
@@ -331,7 +374,12 @@ export function parseXTBExcel(sheets: XTBSheets): ParseResult {
     );
   }
 
-  return buildParseResult(closedRows, cashRows);
+  // Detect XTB Romania from sheet content (fallback when cashRows has no "Romania Tax" entry)
+  const rawText = sheets.closedPositions.flat().join(' ') +
+                  sheets.cashOperations.flat().join(' ');
+  const isRO = rawText.toLowerCase().includes('romania');
+
+  return buildParseResult(closedRows, cashRows, isRO);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,5 +497,8 @@ export function parseXTBPDF(text: string): ParseResult {
     );
   }
 
-  return buildParseResult(closedRows, cashRows);
+  // Detect XTB Romania from full PDF text (account header, entity name, etc.)
+  const isRO = text.toLowerCase().includes('romania');
+
+  return buildParseResult(closedRows, cashRows, isRO);
 }
