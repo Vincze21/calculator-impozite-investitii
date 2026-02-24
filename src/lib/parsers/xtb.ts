@@ -153,7 +153,7 @@ function buildParseResult(
       // direction (LONG/SHORT). The synthetic pair only needs BUY < SELL in time for FIFO.
       const uniqueSymbol = `${cleanedSymbol} #${row.positionId}`;
       const costs = Math.abs(row.commission) + Math.abs(row.swap);
-      const profit = row.grossPL;
+      const profit = -row.grossPL;  // XTB stores inverted: negative = profit, positive = loss
 
       const buyPrice  = profit >= 0 ? 0 : Math.abs(profit);
       const sellPrice = profit >= 0 ? profit : 0;
@@ -200,7 +200,7 @@ function buildParseResult(
         // Avoids depending on 'purchase value'/'sale value' column names which may have
         // newlines or different names in XTB Romania exports.
         // Same synthetic BUY/SELL pattern as forex CFD: gainRON = grossPL - commission.
-        const gain = row.grossPL;
+        const gain = -row.grossPL;  // XTB stores inverted: negative = profit, positive = loss
         const commissionTotal = commissionHalf * 2; // = Math.abs(row.commission)
         const uniqueStockSymbol = `${cleanedSymbol} #${row.positionId}`;
 
