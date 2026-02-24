@@ -6,7 +6,7 @@ import type { BrokerName } from './types';
  */
 export function detectBroker(content: string): BrokerName | null {
   // Use more lines for PDF content which has more header lines
-  const lines = content.split('\n').slice(0, 20).join('\n').toLowerCase();
+  const lines = content.split('\n').slice(0, 30).join('\n').toLowerCase();
 
   // IBKR: multi-section format with "Statement" markers or "ClientAccountID"
   if (
@@ -55,7 +55,18 @@ export function detectBroker(content: string): BrokerName | null {
     return 'avatrade';
   }
 
-  // XTB: "Open price" + "Close price" + "Symbol"
+  // XTB PDF: "Closed Position History" + "xStation" marker
+  {
+    const fullText = content.toLowerCase();
+    if (
+      fullText.includes('closed position history') &&
+      (fullText.includes('xstation') || fullText.includes('xtb'))
+    ) {
+      return 'xtb';
+    }
+  }
+
+  // XTB CSV (xStation export): "Open price" + "Close price" + "Symbol"
   if (
     lines.includes('open price') &&
     lines.includes('close price') &&

@@ -5,6 +5,7 @@ import { parseTradeVille } from './tradeville';
 import { parseAvaTrade } from './avatrade';
 import { parseTrading212 } from './trading212';
 import { parseRevolut } from './revolut';
+import { parseXTBPDF } from './xtb';
 
 /**
  * Main entry: detecteaza broker-ul si parseaza fisierul (CSV sau text extras din PDF).
@@ -32,10 +33,7 @@ export function parseCSV(content: string, _filename?: string): ParseResult {
     case 'revolut':
       return parseRevolut(content);
     case 'xtb':
-      throw new Error(
-        `Parser-ul pentru ${broker} nu e implementat inca. ` +
-        'Foloseste input-ul manual pentru moment.'
-      );
+      return parseXTBPDF(content);
     default:
       throw new Error(`Broker necunoscut: ${broker}`);
   }
@@ -47,3 +45,5 @@ export { parseTradeVille } from './tradeville';
 export { parseAvaTrade } from './avatrade';
 export { parseTrading212 } from './trading212';
 export { parseRevolut } from './revolut';
+export { parseXTBPDF, parseXTBExcel } from './xtb';
+export type { XTBSheets } from './xtb';

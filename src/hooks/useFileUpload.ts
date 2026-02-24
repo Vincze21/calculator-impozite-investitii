@@ -17,15 +17,15 @@ export function useFileUpload() {
 
     try {
       const { parseCSV } = await import('@/lib/parsers');
+      const nameLower = file.name.toLowerCase();
+      let parsed: ParseResult;
 
-      let text: string;
-
-      if (file.name.toLowerCase().endsWith('.pdf')) {
-        // PDF file: extract text using pdfjs-dist (with OCR fallback for image PDFs)
+      if (nameLower.endsWith('.pdf')) {
+        // PDF: extract text, then auto-detect broker and parse
         setProgress('Se incarca PDF-ul...');
         const { extractTextFromPDF } = await import('@/lib/pdf/extract-text');
         const arrayBuffer = await file.arrayBuffer();
-        text = await extractTextFromPDF(arrayBuffer, setProgress);
+        const text = await extractTextFromPDF(arrayBuffer, setProgress);
 
         if (!text.trim()) {
           throw new Error(
@@ -36,12 +36,66 @@ export function useFileUpload() {
         }
         console.log('[PDF] Text extras:', text.substring(0, 1000));
         setProgress('Se parseaza datele...');
+        parsed = parseCSV(text, file.name);
+
+      } else if (nameLower.endsWith('.xlsx') || nameLower.endsWith('.xls')) {
+        // Excel: XTB format — use SheetJS to extract rows, then XTB parser
+        setProgress('Se incarca fisierul Excel...');
+        const [xlsxLib, { parseXTBExcel }] = await Promise.all([
+          import('xlsx'),
+          import('@/lib/parsers/xtb'),
+        ]);
+        const { read, utils } = xlsxLib;
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = read(new Uint8Array(arrayBuffer), {
+          type: 'array', cellDates: false, raw: false,
+        });
+
+        // Convert each sheet to string[][] rows
+        const sheetData = (workbook.SheetNames as string[]).map((name: string) => ({
+          name,
+          rows: utils.sheet_to_json(workbook.Sheets[name], {
+            header: 1, defval: '', raw: false,
+          }) as string[][],
+        }));
+
+        // Identify Closed Positions and Cash Operations sheets by header content
+        let closedPositions: string[][] = [];
+        let cashOperations: string[][] = [];
+
+        for (const { rows } of sheetData) {
+          // Closed Positions: has "Position" + "Open time" + "Close time" columns
+          // (Open Positions sheet also has "Position"+"Open time" but NOT "Close time")
+          const cpIdx = rows.findIndex((r: string[]) =>
+            r.some(c => String(c).toLowerCase().trim() === 'position') &&
+            r.some(c => String(c).toLowerCase().trim() === 'open time') &&
+            r.some(c => String(c).toLowerCase().trim() === 'close time')
+          );
+          if (cpIdx >= 0) {
+            closedPositions = rows.slice(cpIdx);
+            continue;
+          }
+
+          // Cash Operations: has "ID" + "Amount" + "Time" columns (but NOT "Open time")
+          const coIdx = rows.findIndex((r: string[]) =>
+            r.some(c => String(c).toLowerCase().trim() === 'id') &&
+            r.some(c => String(c).toLowerCase().trim() === 'amount') &&
+            r.some(c => String(c).toLowerCase().trim() === 'time')
+          );
+          if (coIdx >= 0) {
+            cashOperations = rows.slice(coIdx);
+          }
+        }
+
+        setProgress('Se parseaza datele...');
+        parsed = parseXTBExcel({ closedPositions, cashOperations });
+
       } else {
-        // CSV/TXT file: read as text directly
-        text = await file.text();
+        // CSV / TXT: read as text and auto-detect broker
+        const text = await file.text();
+        parsed = parseCSV(text, file.name);
       }
 
-      const parsed = parseCSV(text, file.name);
       setResult(parsed);
       setProgress(null);
       return parsed;
