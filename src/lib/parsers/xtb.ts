@@ -339,6 +339,30 @@ export function parseXTBExcel(sheets: XTBSheets): ParseResult {
 // Called from index.ts after extractTextFromPDF produces tab-separated text
 // ---------------------------------------------------------------------------
 
+/**
+ * XTB PDFs may render multi-word column headers as separate tab-separated items
+ * (e.g. "Open\ttime" instead of "Open time").
+ * This function merges adjacent single-word tokens back into known column names.
+ */
+function mergeXTBHeaders(rawCols: string[]): string[] {
+  const MULTI = new Set([
+    'open time', 'close time', 'open price', 'close price',
+    'open origin', 'close origin', 'purchase value', 'sale value',
+    'gross p/l',
+  ]);
+  const result: string[] = [];
+  let i = 0;
+  while (i < rawCols.length) {
+    if (i + 1 < rawCols.length) {
+      const two = rawCols[i] + ' ' + rawCols[i + 1];
+      if (MULTI.has(two)) { result.push(two); i += 2; continue; }
+    }
+    result.push(rawCols[i]);
+    i++;
+  }
+  return result;
+}
+
 export function parseXTBPDF(text: string): ParseResult {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const closedRows: ClosedPositionRow[] = [];
@@ -349,26 +373,30 @@ export function parseXTBPDF(text: string): ParseResult {
   let cashHeaders:   string[] = [];
 
   for (const line of lines) {
-    const lower = line.toLowerCase();
+    // Normalize tabs → spaces before section header detection.
+    // PDF text extraction may render "Closed Position History" as "Closed\tPosition\tHistory"
+    // if each word is a separate text item in the PDF.
+    const lineNorm = line.toLowerCase().replace(/\t+/g, ' ');
 
-    if (lower.includes('closed position history')) { section = 'closed'; continue; }
-    if (lower.includes('open position history'))   { section = null;     continue; }
-    if (lower.includes('pending orders'))          { section = null;     continue; }
-    if (lower.includes('cash operation history'))  { section = 'cash';   continue; }
+    if (lineNorm.includes('closed position history')) { section = 'closed'; continue; }
+    if (lineNorm.includes('open position history'))   { section = null;     continue; }
+    if (lineNorm.includes('pending orders'))          { section = null;     continue; }
+    if (lineNorm.includes('cash operation history'))  { section = 'cash';   continue; }
 
     const cols = line.split('\t').map(c => c.trim());
 
     if (section === 'closed') {
-      if (cols.some(c => c.toLowerCase() === 'position') && cols.some(c => c.toLowerCase() === 'symbol')) {
-        closedHeaders = cols.map(c => c.toLowerCase());
+      const colsLower = cols.map(c => c.toLowerCase());
+      if (colsLower.some(c => c === 'position') && colsLower.some(c => c === 'symbol')) {
+        closedHeaders = mergeXTBHeaders(colsLower);
         continue;
       }
       if (closedHeaders.length === 0) continue;
 
-      function getC(name: string): string {
+      const getC = (name: string): string => {
         const i = closedHeaders.indexOf(name);
         return i >= 0 ? (cols[i] ?? '') : '';
-      }
+      };
 
       const position = getC('position');
       if (!position || position === 'total' || !/^\d+$/.test(position)) continue;
@@ -391,16 +419,17 @@ export function parseXTBPDF(text: string): ParseResult {
     }
 
     if (section === 'cash') {
-      if (cols.some(c => c.toLowerCase() === 'id') && cols.some(c => c.toLowerCase() === 'amount')) {
-        cashHeaders = cols.map(c => c.toLowerCase());
+      const colsLower = cols.map(c => c.toLowerCase());
+      if (colsLower.some(c => c === 'id') && colsLower.some(c => c === 'amount')) {
+        cashHeaders = mergeXTBHeaders(colsLower);
         continue;
       }
       if (cashHeaders.length === 0) continue;
 
-      function getCash(name: string): string {
+      const getCash = (name: string): string => {
         const i = cashHeaders.indexOf(name);
         return i >= 0 ? (cols[i] ?? '') : '';
-      }
+      };
 
       const id = cols[cashHeaders.indexOf('id')] ?? '';
       if (!id || id === 'total' || !/^\d+$/.test(id)) continue;
