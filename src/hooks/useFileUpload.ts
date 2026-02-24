@@ -52,11 +52,14 @@ export function useFileUpload() {
         });
 
         // Convert each sheet to string[][] rows
+        // raw: true = return actual stored cell values (numbers as numbers), not Excel-formatted strings.
+        // XTB Romania uses display formats that invert the sign and round decimals, so raw: false
+        // would return e.g. "-31" for a +31.40 RON profit cell. raw: true gives us the real value.
         const sheetData = (workbook.SheetNames as string[]).map((name: string) => ({
           name,
-          rows: utils.sheet_to_json(workbook.Sheets[name], {
-            header: 1, defval: '', raw: false,
-          }) as string[][],
+          rows: (utils.sheet_to_json(workbook.Sheets[name], {
+            header: 1, defval: '', raw: true,
+          }) as unknown[][]).map((r: unknown[]) => r.map((c: unknown) => c == null ? '' : String(c))),
         }));
 
         // Identify Closed Positions and Cash Operations sheets by header content
