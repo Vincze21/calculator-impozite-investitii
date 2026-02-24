@@ -196,22 +196,27 @@ function buildParseResult(
       const commissionHalf = Math.abs(row.commission) / 2;
 
       if (resident) {
-        // FIX Bug 2: XTB Romania — Purchase/Sale values are already in RON, commission too.
-        // Use currency='RON' so FIFO applies rate=1 (no double-conversion of commission).
-        const buyPriceRON = vol > 0 ? row.purchaseValue / vol : 0;
-        const sellPriceRON = vol > 0 ? row.saleValue / vol : 0;
+        // FIX: Use grossPL directly (XTB already computes it in RON).
+        // Avoids depending on 'purchase value'/'sale value' column names which may have
+        // newlines or different names in XTB Romania exports.
+        // Same synthetic BUY/SELL pattern as forex CFD: gainRON = grossPL - commission.
+        const gain = row.grossPL;
+        const commissionTotal = commissionHalf * 2; // = Math.abs(row.commission)
+        const uniqueStockSymbol = `${cleanedSymbol} #${row.positionId}`;
+
+        const buyPrice  = gain >= 0 ? 0 : Math.abs(gain);
+        const sellPrice = gain >= 0 ? gain : 0;
 
         transactions.push({
           id: uuidv4(),
           date: openDate,
           type: 'buy',
-          symbol: cleanedSymbol,
-          quantity: vol,
-          pricePerUnit: buyPriceRON,
-          totalAmount: row.purchaseValue,
-          commission: commissionHalf,
+          symbol: uniqueStockSymbol,
+          quantity: 1,
+          pricePerUnit: buyPrice,
+          totalAmount: buyPrice,
+          commission: commissionTotal,
           currency: 'RON',
-          exchangeRate: 1,
           instrumentType,
         });
 
@@ -219,13 +224,12 @@ function buildParseResult(
           id: uuidv4(),
           date: closeDate,
           type: 'sell',
-          symbol: cleanedSymbol,
-          quantity: vol,
-          pricePerUnit: sellPriceRON,
-          totalAmount: row.saleValue,
-          commission: commissionHalf,
+          symbol: uniqueStockSymbol,
+          quantity: 1,
+          pricePerUnit: sellPrice,
+          totalAmount: sellPrice,
+          commission: 0,
           currency: 'RON',
-          exchangeRate: 1,
           instrumentType,
         });
       } else {
@@ -321,7 +325,7 @@ export function parseXTBExcel(sheets: XTBSheets): ParseResult {
   // Parse closed positions
   const cpRows = sheets.closedPositions;
   if (cpRows.length > 0) {
-    const headers = cpRows[0].map(h => String(h).toLowerCase().trim());
+    const headers = cpRows[0].map(h => String(h).toLowerCase().replace(/\s+/g, ' ').trim());
 
     function idx(name: string): number { return headers.indexOf(name); }
 
@@ -351,7 +355,7 @@ export function parseXTBExcel(sheets: XTBSheets): ParseResult {
   // Parse cash operations
   const coRows = sheets.cashOperations;
   if (coRows.length > 0) {
-    const headers = coRows[0].map(h => String(h).toLowerCase().trim());
+    const headers = coRows[0].map(h => String(h).toLowerCase().replace(/\s+/g, ' ').trim());
     function idx(name: string): number { return headers.indexOf(name); }
 
     for (let i = 1; i < coRows.length; i++) {

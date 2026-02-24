@@ -66,10 +66,11 @@ export function useFileUpload() {
         for (const { rows } of sheetData) {
           // Closed Positions: has "Position" + "Open time" + "Close time" columns
           // (Open Positions sheet also has "Position"+"Open time" but NOT "Close time")
+          const norm = (c: unknown) => String(c).toLowerCase().replace(/\s+/g, ' ').trim();
           const cpIdx = rows.findIndex((r: string[]) =>
-            r.some(c => String(c).toLowerCase().trim() === 'position') &&
-            r.some(c => String(c).toLowerCase().trim() === 'open time') &&
-            r.some(c => String(c).toLowerCase().trim() === 'close time')
+            r.some(c => norm(c) === 'position') &&
+            r.some(c => norm(c) === 'open time') &&
+            r.some(c => norm(c) === 'close time')
           );
           if (cpIdx >= 0) {
             closedPositions = rows.slice(cpIdx);
@@ -78,9 +79,9 @@ export function useFileUpload() {
 
           // Cash Operations: has "ID" + "Amount" + "Time" columns (but NOT "Open time")
           const coIdx = rows.findIndex((r: string[]) =>
-            r.some(c => String(c).toLowerCase().trim() === 'id') &&
-            r.some(c => String(c).toLowerCase().trim() === 'amount') &&
-            r.some(c => String(c).toLowerCase().trim() === 'time')
+            r.some(c => norm(c) === 'id') &&
+            r.some(c => norm(c) === 'amount') &&
+            r.some(c => norm(c) === 'time')
           );
           if (coIdx >= 0) {
             cashOperations = rows.slice(coIdx);
